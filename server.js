@@ -2,6 +2,8 @@ const chokidar = require("chokidar");
 const express = require("express");
 const WebSocket = require("ws");
 const path = require("path");
+const fs = require("fs");
+const esbuild = require("esbuild");
 
 const app = express();
 const wss = new WebSocket.Server({ noServer: true });
@@ -32,7 +34,23 @@ watcher.on("change", (filePath) => {
 
 // 提供静态资源，包括 src 目录
 app.use(express.static("public"));
-app.use("/src", express.static(path.join(__dirname, "src")));
+
+// 拦截 .jsx 文件请求并动态编译
+app.get("/src/*.jsx", async (req, res) => {
+  const filePath = path.join(__dirname, req.path);
+  try {
+    const jsxCode = fs.readFileSync(filePath, "utf-8");
+    const result = await esbuild.transform(jsxCode, {
+      loader: "jsx",
+      format: "esm",
+    });
+    res.setHeader("Content-Type", "application/javascript");
+    res.send(result.code);
+  } catch (error) {
+    console.error("Failed to compile JSX:", error);
+    res.status(500).send("Internal Server Error");
+  }
+});
 
 // HTTP服务
 const PORT = 3000;
