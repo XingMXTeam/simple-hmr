@@ -27,7 +27,7 @@ watcher.on("change", (path) => {
     updated: { [moduleId]: `/__hmr/${updateID}.hot-update.js` },
   };
 
-  // 生成hot-update.js
+  // 生成hot-update.js  diff-match-patch 实际可以通过这个包实现补丁推动代码，而不是全量推送
   const code = `
     (() => {
       const moduleId = ${JSON.stringify(moduleId)};
