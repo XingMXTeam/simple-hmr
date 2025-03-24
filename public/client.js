@@ -1,33 +1,41 @@
+const socket = new WebSocket(`ws://${location.host}`);
 
+// 模拟 Vite 的 import.meta.hot 初始化
+const hotModulesMap = new Map();
 
-window.__webpack_modules__ = new Map();
-window.webpackHotUpdate = (moduleId, newModule) => {
-  const mod = __webpack_modules__.get(moduleId);
-  if (mod && mod.hot) {
-    mod.hot.accept((module, exports) => {
-        return newModule[moduleId](module, exports);
-    });
-  }
-};
+function createHotContext(modulePath) {
+  // 将 modulePath 转换为相对路径（去掉域名部分）
+  const relativePath = new URL(modulePath, location.origin).pathname;
 
-// 模块加载包装器
-function require(moduleId) {
-  const mod = __webpack_modules__.get(moduleId);
-  return mod?.exports;
+  return {
+    accept(callback) {
+      hotModulesMap.set(relativePath, callback); // 存储相对路径
+    },
+  };
 }
 
-const socket = new WebSocket(`ws://${location.host}`);
 socket.addEventListener("message", async ({ data }) => {
-  const { type, url } = JSON.parse(data);
+  const { type, path } = JSON.parse(data);
   if (type === "hot-update") {
-    // 获取hot-update.json
-    const res = await fetch(url);
-    const { h: version, updated } = await res.json();
+    console.log(`Hot update for: ${path}`);
 
-    // 加载更新的文件
-    await Promise.all(
-      Object.values(updated).map((file) => import(`${file}?t=${version}`))
-    );
+    try {
+      // 动态重新加载模块
+      const module = await import(`${path}?t=${Date.now()}`);
+
+      // 检查是否有热更新回调
+      const hotCallback = hotModulesMap.get(path); // 使用相对路径查找
+      if (hotCallback) {
+        hotCallback(module);
+      }
+    } catch (error) {
+      console.error(`Failed to reload module ${path}:`, error);
+    }
   }
 });
+
+// 为每个模块注入 import.meta.hot
+window.__vite__ = {
+  createHotContext,
+};
 
