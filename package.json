@@ -11,6 +11,9 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "ws": "^8.18.0"
-  }
+    "chokidar": "^4.0.3",
+    "express": "^4.21.2",
+    "ws": "^8.18.1"
+  },
+  "repository": "https://github.com/XingMXTeam/simple-hmr.git"
 }

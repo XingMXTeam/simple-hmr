@@ -1,72 +1,79 @@
-const WebSocket = require('ws');
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
+const chokidar = require("chokidar");
+const express = require("express");
+const WebSocket = require("ws");
 
-const wss = new WebSocket.Server({ port: 8080 });
+const app = express();
+const wss = new WebSocket.Server({ noServer: true });
 
-let currentHash = 'initial-hash';
-const modulePath = path.join(__dirname, 'module.js');
+const getModuleId = (path) => `./${path.replace(/\\/g, "/")}`;
 
-function generateHash(content) {
-  return crypto.createHash('md5').update(content).digest('hex');
-}
-
-function readModuleContent() {
-  return fs.readFileSync(modulePath, 'utf-8');
-}
-
-let moduleContent = readModuleContent();
-currentHash = generateHash(moduleContent);
-
-wss.on('connection', (ws) => {
-  console.log('Client connected');
-
-  // Send the current hash to the client
-  ws.send(JSON.stringify({ type: 'hash', hash: currentHash }));
-
-  ws.on('message', (message) => {
-    const data = JSON.parse(message);
-    console.log('Received message:', data);
-
-    if (data.type === 'check') {
-      if (data.hash !== currentHash) {
-        ws.send(JSON.stringify({ 
-          type: 'update', 
-          hash: currentHash, 
-          modules: ['module.js']
-        }));
-      } else {
-        ws.send(JSON.stringify({ type: 'no-update' }));
-      }
-    } else if (data.type === 'get-update') {
-      ws.send(JSON.stringify({ 
-        type: 'module-update', 
-        module: data.module, 
-        content: moduleContent 
-      }));
-    }
-  });
+// 文件监听
+const watcher = chokidar.watch("./src", {
+  ignored: /^\./,
+  persistent: true,
 });
 
-// Watch for file changes
-fs.watch(modulePath, (eventType, filename) => {
-  if (eventType === 'change') {
-    console.log(`File ${filename} has been changed`);
-    moduleContent = readModuleContent();
-    const newHash = generateHash(moduleContent);
-    
-    if (newHash !== currentHash) {
-      currentHash = newHash;
-      console.log('New hash:', currentHash);
+const hmrFiles = new Map();
 
-      wss.clients.forEach((client) => {
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({ type: 'hash', hash: currentHash }));
+// WebSocket通信
+watcher.on("change", (path) => {
+  const updateID = Date.now();
+
+  const moduleId = getModuleId(path);
+
+  // 生成hot-update.json
+  const manifest = {
+    h: updateID,
+    updated: { [moduleId]: `/__hmr/${updateID}.hot-update.js` },
+  };
+
+  // 生成hot-update.js
+  const code = `
+    (() => {
+      const moduleId = ${JSON.stringify(moduleId)};
+      window.webpackHotUpdate(moduleId, {
+        "${moduleId}": (module, exports) => {
+           const moduleCode = ${JSON.stringify(require("fs").readFileSync(path, "utf-8"))};
+           eval(moduleCode);
         }
       });
-    }
+    })();
+  `;
+
+  // 通过WebSocket发送元数据
+  wss.clients.forEach((client) => {
+    // if (client.readyState === wss.OPEN) {
+      client.send(
+        JSON.stringify({
+          type: "hot-update",
+          url: `/__hmr/${updateID}.hot-update.json`,
+        })
+      );
+    // }
+  });
+
+  // 存储热更新文件（实际应写入内存文件系统）
+  hmrFiles.set(`/__hmr/${updateID}.hot-update.json`, JSON.stringify(manifest));
+  hmrFiles.set(`/__hmr/${updateID}.hot-update.js`, code);
+});
+
+// HTTP服务
+const PORT = 3000;
+const server = app.use(express.static("public")).listen(PORT, () => {
+  console.log(`Server is running on http://localhost:${PORT}`);
+});
+
+app.get("/__hmr/:filename", (req, res) => {
+  const filename = `/__hmr/${req.params.filename}`;
+  if (hmrFiles.has(filename)) {
+    res.type("application/javascript").send(hmrFiles.get(filename));
+  } else {
+    res.status(404).send("File not found");
   }
 });
 
-console.log(`Server is watching for changes in ${modulePath}`);
+server.on("upgrade", (request, socket, head) => {
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit("connection", ws, request);
+  });
+});
